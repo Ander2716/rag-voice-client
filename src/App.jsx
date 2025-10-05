@@ -96,7 +96,7 @@ const STATES = {
 // ====================================================================
 
 // ESTA URL DEBE APUNTAR A TU TUNEL DE CLOUDFLARE + /ask
-const API_URL = "https://tu-url-de-cloudflare.trycloudflare.com/ask"; 
+const API_URL = " https://mineral-aging-scratch-rna.trycloudflare.com/ask"; 
 // 🚨 ATENCIÓN: Por favor, reemplaza la URL anterior por tu URL ACTIVA
 
 // ====================================================================
@@ -114,10 +114,14 @@ const App = () => {
     const recognitionRef = useRef(null);
     const appStateRef = useRef(appState);
     const queryRef = useRef(query);
+    // 🚨 Nueva referencia para manejar la condición de carrera
+    const resultReceivedRef = useRef(false); 
 
     useEffect(() => {
         appStateRef.current = appState;
         queryRef.current = query;
+        // DEBUG LOG: Muestra cada vez que el estado cambia
+        console.log(`[STATE CHANGE] New State: ${appState}, Query Length: ${query.length}`);
     }, [appState, query]);
 
 
@@ -134,45 +138,53 @@ const App = () => {
             recognitionRef.current.onresult = (event) => {
                 const last = event.results.length - 1;
                 const transcript = event.results[last][0].transcript;
+                console.log(`[STT onresult] Transcripción: "${transcript}" (Length: ${transcript.length})`); 
                 
-                if (transcript && appStateRef.current === STATES.TRANSCRIBING) {
-                    setQuery(transcript); 
-                    // Transición a READY_TO_SEND para habilitar el botón "Enviar"
-                    setAppState(STATES.READY_TO_SEND);
-                    setStatus("📝 Transcripción lista. Edita y presiona ENVIAR.");
-                } else if (appStateRef.current === STATES.TRANSCRIBING) {
-                    setStatus("No se detectó voz. Listo para grabar...");
-                    setAppState(STATES.IDLE);
+                // Solo actualizamos si venimos del estado de transcripción
+                if (appStateRef.current === STATES.TRANSCRIBING) {
+                    if (transcript.trim().length > 0) {
+                        setQuery(transcript); 
+                        resultReceivedRef.current = true; // 💡 ¡Éxito! Marcamos la referencia.
+                        // Transición a READY_TO_SEND para habilitar los botones
+                        setAppState(STATES.READY_TO_SEND);
+                        setStatus("📝 Transcripción lista. Edita y presiona ENVIAR.");
+                        console.log("[STT SUCCESS] Estado de botones habilitado.");
+                    } else {
+                        // Transcripción vacía, reseteamos a IDLE
+                        setStatus("No se detectó voz o la transcripción estaba vacía.");
+                        setAppState(STATES.IDLE);
+                    }
                 }
             };
 
             // --- MANEJO DE ERRORES ---
             recognitionRef.current.onerror = (event) => {
                 const currentState = appStateRef.current;
+                console.error('[STT onerror] Error:', event.error); // DEBUG LOG
                 
                 if (event.error !== 'no-speech' && currentState !== STATES.IDLE) {
-                    console.error('Speech Recognition Error:', event.error);
                     setStatus(`❌ Error STT: ${event.error}. Intenta de nuevo.`);
                 } else if (event.error === 'no-speech' && currentState === STATES.TRANSCRIBING) {
                     setStatus("No se detectó voz o la grabación fue muy corta.");
                 }
                 
-                // Forzamos el reset a IDLE si no estábamos ya en un estado final (READY_TO_SEND o LOADING)
-                if (currentState !== STATES.IDLE && currentState !== STATES.READY_TO_SEND && currentState !== STATES.LOADING) { 
+                // Forzamos el reset a IDLE si falló la grabación o transcripción
+                if (currentState === STATES.RECORDING || currentState === STATES.TRANSCRIBING) { 
                     setAppState(STATES.IDLE);
                 }
             };
 
-            // --- FIN DEL RECONOCIMIENTO (CORRECCIÓN CLAVE) ---
+            // --- FIN DEL RECONOCIMIENTO (CORRECCIÓN CLAVE DE CARRERA) ---
             recognitionRef.current.onend = () => {
-                // Si el estado es TRANSCRIBING y no se obtuvo texto (queryRef.current está vacío),
-                // significa que onresult falló o no se disparó. Volvemos a IDLE.
-                // Si ya estamos en READY_TO_SEND (porque onresult fue exitoso), no hacemos nada aquí
-                // para evitar anular el estado de envío.
-                if (appStateRef.current === STATES.TRANSCRIBING && !queryRef.current) {
-                    setStatus("Procesamiento finalizado sin transcripción.");
+                console.log("[STT onend] Reconocimiento finalizado."); // DEBUG LOG
+                
+                // 💡 Condición de carrera corregida: Solo reseteamos a IDLE si aún estábamos en TRANSCRIBING 
+                // Y *NO* recibimos un resultado exitoso (resultReceivedRef es false).
+                if (appStateRef.current === STATES.TRANSCRIBING && !resultReceivedRef.current) {
+                    setStatus("Tiempo de procesamiento finalizado. No se obtuvo transcripción.");
                     setAppState(STATES.IDLE);
                 }
+                // Si resultReceivedRef es true, dejamos que el setAppState(READY_TO_SEND) de onresult haga su trabajo.
             };
         } else {
             setSttSupported(false);
@@ -185,14 +197,12 @@ const App = () => {
     // ====================================================================
 
     const sendQueryToApi = async (textQuery) => {
-        if (!textQuery) {
-            setStatus("La consulta está vacía. Graba o escribe algo.");
-            return;
-        }
+        if (!textQuery || appState === STATES.LOADING) return;
 
         setAppState(STATES.LOADING);
         setResponse(null);
         setStatus(`Enviando: "${textQuery}" a la API RAG...`);
+        console.log("[API RAG] Iniciando envío de consulta."); 
 
         const payload = { query: textQuery };
         const maxRetries = 3;
@@ -214,18 +224,17 @@ const App = () => {
                 
                 if (data.answer) {
                     setResponse(data.answer);
-                    setStatus("Respuesta RAG recibida.");
+                    setStatus("✅ Respuesta RAG recibida.");
                 } else {
                     setResponse("La API devolvió un formato de respuesta inesperado.");
-                    setStatus("Error de formato de respuesta.");
+                    setStatus("❌ Error de formato de respuesta.");
                 }
                 
-                // Tras el éxito, volvemos a IDLE, pero manteniendo la respuesta y la query
                 setAppState(STATES.IDLE); 
                 return; 
             } catch (error) {
                 lastError = error;
-                console.error(`Intento ${attempt + 1} fallido.`, error);
+                console.error(`[API RAG] Intento ${attempt + 1} fallido.`, error);
                 if (attempt < maxRetries - 1) {
                     const delay = Math.pow(2, attempt) * 1000;
                     await new Promise(resolve => setTimeout(resolve, delay));
@@ -233,8 +242,8 @@ const App = () => {
             }
         }
         
-        console.error("Fallo final después de reintentos.", lastError);
-        setStatus("Hubo un error al comunicarse con la API. Revisa la URL y el túnel de Cloudflare.");
+        console.error("[API RAG] Fallo final después de reintentos.", lastError);
+        setStatus("❌ Hubo un error al comunicarse con la API. Revisa la URL y el túnel de Cloudflare.");
         setResponse(null);
         setAppState(STATES.IDLE);
     };
@@ -242,17 +251,19 @@ const App = () => {
 
     // --- 1. Grabar / Detener ---
     const handleRecordStopClick = () => {
-        if (!sttSupported) return;
+        if (!sttSupported || appState === STATES.LOADING || appState === STATES.TRANSCRIBING) return;
 
-        if (appState === STATES.IDLE) {
+        if (appState === STATES.IDLE || appState === STATES.READY_TO_SEND) {
             // Iniciar Grabación
-            setQuery(""); // Limpiamos la consulta anterior
-            setResponse(null); // Limpiamos la respuesta anterior
+            setQuery(""); 
+            setResponse(null); 
+            resultReceivedRef.current = false; // Reset de la bandera de éxito
             
             try {
                 recognitionRef.current.start();
                 setAppState(STATES.RECORDING);
                 setStatus("🔴 Grabando... Presiona para DETENER.");
+                console.log("[STT] Grabación iniciada.");
             } catch (err) {
                 if (err.name !== 'InvalidStateError') {
                     console.error("Error al iniciar el micrófono:", err);
@@ -267,6 +278,7 @@ const App = () => {
             }
             setAppState(STATES.TRANSCRIBING);
             setStatus("Procesando transcripción...");
+            console.log("[STT] Grabación detenida. Esperando onresult/onend.");
         }
     };
     
@@ -287,10 +299,12 @@ const App = () => {
         } 
         
         // Resetear todo el estado
+        resultReceivedRef.current = false; // Aseguramos el reset de la bandera
         setAppState(STATES.IDLE);
         setQuery(""); 
         setResponse(null);
-        setStatus("Listo para grabar...");
+        setStatus("Operación cancelada. Listo para grabar...");
+        console.log("[RESET] Estado de la aplicación reseteado.");
     }
 
     // ====================================================================
@@ -317,7 +331,12 @@ const App = () => {
     
     // Estilos para el botón de Enviar
     const getSendButtonClasses = () => {
-        const disabled = appState !== STATES.READY_TO_SEND || query.length === 0;
+        // El botón solo está activo si el estado es READY_TO_SEND y hay texto.
+        const disabled = appState !== STATES.READY_TO_SEND || query.length === 0 || appState === STATES.LOADING;
+        
+        // DEBUG LOG para ver el estado de habilitación
+        console.log(`[Button State] Enviar: Disabled=${disabled}, State=${appState}, QueryLen=${query.length}`);
+
         return `px-6 py-2 rounded-full font-semibold transition-colors duration-200 flex items-center justify-center space-x-2 w-full md:w-auto
             ${disabled 
                 ? 'bg-gray-300 text-gray-500 cursor-not-allowed' 
@@ -326,14 +345,19 @@ const App = () => {
     
     // Estilos para el botón de Cancelar
     const getCancelButtonClasses = () => {
+        // Disabled si IDLE (no hay nada que cancelar) o LOADING (esperando respuesta API)
         const disabled = appState === STATES.IDLE || appState === STATES.LOADING;
+        
+        // DEBUG LOG para ver el estado de habilitación
+        console.log(`[Button State] Cancelar: Disabled=${disabled}, State=${appState}`);
+
         return `px-6 py-2 rounded-full font-semibold transition-colors duration-200 flex items-center justify-center space-x-2 w-full md:w-auto
             ${disabled 
                 ? 'bg-gray-300 text-gray-500 cursor-not-allowed' 
                 : 'bg-red-600 text-white hover:bg-red-700 shadow-md'}`;
     }
 
-    // Deshabilita el botón principal solo cuando está en proceso no interactivo
+    // Deshabilita el botón principal solo cuando está en proceso no interactivo (cargando o transcribiendo)
     const isMainButtonDisabled = appState === STATES.LOADING || appState === STATES.TRANSCRIBING || !sttSupported;
 
     // Deshabilita el área de texto solo si no estamos en READY_TO_SEND (para edición)
@@ -370,10 +394,9 @@ const App = () => {
                 {/* Área de estado y consulta */}
                 <div className="w-full bg-blue-50/50 border border-blue-100 rounded-lg p-4 space-y-3">
                     <div className="flex items-center space-x-2 text-sm font-medium">
-                        {(appState === STATES.LOADING || appState === STATES.TRANSCRIBING) && (
+                        {(appState === STATES.LOADING || appState === STATES.TRANSCRIBING) ? (
                             <RotateCcwIcon size={16} className="text-orange-500 animate-spin" />
-                        )}
-                        {(appState !== STATES.LOADING && appState !== STATES.TRANSCRIBING) && sttSupported ? (
+                        ) : sttSupported ? (
                              <InfoIcon size={16} className="text-blue-600" />
                         ) : (
                              <CloudOffIcon size={16} className="text-red-600" />
@@ -417,7 +440,7 @@ const App = () => {
                         </button>
                     </div>
                     
-                    <p className="text-sm text-gray-500 font-medium">
+                    <p className="text-sm text-gray-500 font-medium h-4">
                         {appState === STATES.RECORDING ? "Presiona para DETENER" : "Presiona para GRABAR"}
                     </p>
 
