@@ -78,17 +78,24 @@ const SquareIcon = (props) => (
     </IconWrapper>
 );
 
+const ClipboardIcon = (props) => (
+    <IconWrapper {...props}>
+        <rect width="8" height="4" x="8" y="2" rx="1" ry="1"/>
+        <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
+    </IconWrapper>
+);
+
 
 // Inicialización de la API de Reconocimiento de Voz
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
 // Definición de los estados del ciclo de vida de la aplicación
 const STATES = {
-    IDLE: 'IDLE',              // Esperando una nueva grabación
-    RECORDING: 'RECORDING',    // Grabando audio
+    IDLE: 'IDLE',              // Esperando una nueva grabación
+    RECORDING: 'RECORDING',    // Grabando audio
     TRANSCRIBING: 'TRANSCRIBING',// Procesando audio a texto (esperando onresult)
     READY_TO_SEND: 'READY_TO_SEND',// Transcripción lista, esperando confirmación/edición
-    LOADING: 'LOADING',        // Enviando consulta a la API RAG
+    LOADING: 'LOADING',        // Enviando consulta a la API RAG
 };
 
 // ====================================================================
@@ -96,8 +103,9 @@ const STATES = {
 // ====================================================================
 
 // ESTA URL DEBE APUNTAR A TU TUNEL DE CLOUDFLARE + /ask
-const API_URL = " https://mineral-aging-scratch-rna.trycloudflare.com/ask"; 
+const API_URL = "https://mineral-aging-scratch-rna.trycloudflare.com/ask"; 
 // 🚨 ATENCIÓN: Por favor, reemplaza la URL anterior por tu URL ACTIVA
+// Si tu API está en localhost:8000, necesitarás Cloudflare Tunnel o similar.
 
 // ====================================================================
 // COMPONENTE PRINCIPAL
@@ -107,20 +115,21 @@ const App = () => {
     const [appState, setAppState] = useState(STATES.IDLE);
     const [status, setStatus] = useState("Listo para grabar...");
     const [query, setQuery] = useState("");
-    const [response, setResponse] = useState(null);
+    
+    // ESTADO ACTUALIZADO: Almacena el objeto completo {answer, context, source, seccion, ...}
+    const [ragResult, setRagResult] = useState(null); 
+    
     const [sttSupported, setSttSupported] = useState(false);
     
     // Referencias para evitar problemas de sincronización con la API nativa
     const recognitionRef = useRef(null);
     const appStateRef = useRef(appState);
     const queryRef = useRef(query);
-    // 🚨 Nueva referencia para manejar la condición de carrera
     const resultReceivedRef = useRef(false); 
 
     useEffect(() => {
         appStateRef.current = appState;
         queryRef.current = query;
-        // DEBUG LOG: Muestra cada vez que el estado cambia
         console.log(`[STATE CHANGE] New State: ${appState}, Query Length: ${query.length}`);
     }, [appState, query]);
 
@@ -140,17 +149,14 @@ const App = () => {
                 const transcript = event.results[last][0].transcript;
                 console.log(`[STT onresult] Transcripción: "${transcript}" (Length: ${transcript.length})`); 
                 
-                // Solo actualizamos si venimos del estado de transcripción
                 if (appStateRef.current === STATES.TRANSCRIBING) {
                     if (transcript.trim().length > 0) {
                         setQuery(transcript); 
-                        resultReceivedRef.current = true; // 💡 ¡Éxito! Marcamos la referencia.
-                        // Transición a READY_TO_SEND para habilitar los botones
+                        resultReceivedRef.current = true;
                         setAppState(STATES.READY_TO_SEND);
                         setStatus("📝 Transcripción lista. Edita y presiona ENVIAR.");
                         console.log("[STT SUCCESS] Estado de botones habilitado.");
                     } else {
-                        // Transcripción vacía, reseteamos a IDLE
                         setStatus("No se detectó voz o la transcripción estaba vacía.");
                         setAppState(STATES.IDLE);
                     }
@@ -160,7 +166,7 @@ const App = () => {
             // --- MANEJO DE ERRORES ---
             recognitionRef.current.onerror = (event) => {
                 const currentState = appStateRef.current;
-                console.error('[STT onerror] Error:', event.error); // DEBUG LOG
+                console.error('[STT onerror] Error:', event.error);
                 
                 if (event.error !== 'no-speech' && currentState !== STATES.IDLE) {
                     setStatus(`❌ Error STT: ${event.error}. Intenta de nuevo.`);
@@ -168,7 +174,6 @@ const App = () => {
                     setStatus("No se detectó voz o la grabación fue muy corta.");
                 }
                 
-                // Forzamos el reset a IDLE si falló la grabación o transcripción
                 if (currentState === STATES.RECORDING || currentState === STATES.TRANSCRIBING) { 
                     setAppState(STATES.IDLE);
                 }
@@ -176,15 +181,12 @@ const App = () => {
 
             // --- FIN DEL RECONOCIMIENTO (CORRECCIÓN CLAVE DE CARRERA) ---
             recognitionRef.current.onend = () => {
-                console.log("[STT onend] Reconocimiento finalizado."); // DEBUG LOG
+                console.log("[STT onend] Reconocimiento finalizado."); 
                 
-                // 💡 Condición de carrera corregida: Solo reseteamos a IDLE si aún estábamos en TRANSCRIBING 
-                // Y *NO* recibimos un resultado exitoso (resultReceivedRef es false).
                 if (appStateRef.current === STATES.TRANSCRIBING && !resultReceivedRef.current) {
                     setStatus("Tiempo de procesamiento finalizado. No se obtuvo transcripción.");
                     setAppState(STATES.IDLE);
                 }
-                // Si resultReceivedRef es true, dejamos que el setAppState(READY_TO_SEND) de onresult haga su trabajo.
             };
         } else {
             setSttSupported(false);
@@ -200,7 +202,7 @@ const App = () => {
         if (!textQuery || appState === STATES.LOADING) return;
 
         setAppState(STATES.LOADING);
-        setResponse(null);
+        setRagResult(null); // Limpiar resultado anterior
         setStatus(`Enviando: "${textQuery}" a la API RAG...`);
         console.log("[API RAG] Iniciando envío de consulta."); 
 
@@ -222,13 +224,21 @@ const App = () => {
     
                 const data = await res.json();
                 
-                if (data.answer) {
-                    setResponse(data.answer);
+                // *** CAMBIO CLAVE: Procesar la nueva respuesta plana del API ***
+                if (data.status === 'success' && data.answer) {
+                    setRagResult(data); // Almacenar el objeto completo {answer, context, source, seccion}
                     setStatus("✅ Respuesta RAG recibida.");
                 } else {
-                    setResponse("La API devolvió un formato de respuesta inesperado.");
-                    setStatus("❌ Error de formato de respuesta.");
+                    setRagResult({ 
+                        answer: data.message || "La API devolvió un formato de respuesta inesperado o un error.",
+                        context: 'N/A',
+                        source: 'N/A',
+                        seccion: 'N/A',
+                        status: 'error'
+                    });
+                    setStatus("❌ Error de formato de respuesta o error de API.");
                 }
+                // ***************************************************************
                 
                 setAppState(STATES.IDLE); 
                 return; 
@@ -244,7 +254,7 @@ const App = () => {
         
         console.error("[API RAG] Fallo final después de reintentos.", lastError);
         setStatus("❌ Hubo un error al comunicarse con la API. Revisa la URL y el túnel de Cloudflare.");
-        setResponse(null);
+        setRagResult(null);
         setAppState(STATES.IDLE);
     };
 
@@ -256,8 +266,8 @@ const App = () => {
         if (appState === STATES.IDLE || appState === STATES.READY_TO_SEND) {
             // Iniciar Grabación
             setQuery(""); 
-            setResponse(null); 
-            resultReceivedRef.current = false; // Reset de la bandera de éxito
+            setRagResult(null); // Limpiar resultado anterior
+            resultReceivedRef.current = false;
             
             try {
                 recognitionRef.current.start();
@@ -299,10 +309,10 @@ const App = () => {
         } 
         
         // Resetear todo el estado
-        resultReceivedRef.current = false; // Aseguramos el reset de la bandera
+        resultReceivedRef.current = false;
         setAppState(STATES.IDLE);
         setQuery(""); 
-        setResponse(null);
+        setRagResult(null); // Limpiar resultado
         setStatus("Operación cancelada. Listo para grabar...");
         console.log("[RESET] Estado de la aplicación reseteado.");
     }
@@ -331,12 +341,8 @@ const App = () => {
     
     // Estilos para el botón de Enviar
     const getSendButtonClasses = () => {
-        // El botón solo está activo si el estado es READY_TO_SEND y hay texto.
         const disabled = appState !== STATES.READY_TO_SEND || query.length === 0 || appState === STATES.LOADING;
         
-        // DEBUG LOG para ver el estado de habilitación
-        console.log(`[Button State] Enviar: Disabled=${disabled}, State=${appState}, QueryLen=${query.length}`);
-
         return `px-6 py-2 rounded-full font-semibold transition-colors duration-200 flex items-center justify-center space-x-2 w-full md:w-auto
             ${disabled 
                 ? 'bg-gray-300 text-gray-500 cursor-not-allowed' 
@@ -345,24 +351,16 @@ const App = () => {
     
     // Estilos para el botón de Cancelar
     const getCancelButtonClasses = () => {
-        // Disabled si IDLE (no hay nada que cancelar) o LOADING (esperando respuesta API)
         const disabled = appState === STATES.IDLE || appState === STATES.LOADING;
         
-        // DEBUG LOG para ver el estado de habilitación
-        console.log(`[Button State] Cancelar: Disabled=${disabled}, State=${appState}`);
-
         return `px-6 py-2 rounded-full font-semibold transition-colors duration-200 flex items-center justify-center space-x-2 w-full md:w-auto
             ${disabled 
                 ? 'bg-gray-300 text-gray-500 cursor-not-allowed' 
                 : 'bg-red-600 text-white hover:bg-red-700 shadow-md'}`;
     }
 
-    // Deshabilita el botón principal solo cuando está en proceso no interactivo (cargando o transcribiendo)
     const isMainButtonDisabled = appState === STATES.LOADING || appState === STATES.TRANSCRIBING || !sttSupported;
-
-    // Deshabilita el área de texto solo si no estamos en READY_TO_SEND (para edición)
     const isTextareaDisabled = appState !== STATES.READY_TO_SEND;
-
 
     return (
         <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
@@ -401,7 +399,7 @@ const App = () => {
                         ) : (
                              <CloudOffIcon size={16} className="text-red-600" />
                         )}
-                       
+                        
                         <span className={`text-gray-700 ${appState === STATES.LOADING || appState === STATES.TRANSCRIBING ? 'text-orange-500 font-semibold' : ''}`}>
                             {status}
                         </span>
@@ -470,14 +468,45 @@ const App = () => {
 
                 </div>
 
-                {/* Área de Respuesta RAG */}
-                {response && (
-                    <div className="w-full bg-white border-t-4 border-blue-500 rounded-lg p-5 shadow-lg space-y-3 mt-6">
-                        <h2 className="text-lg font-bold text-blue-700 flex items-center space-x-2">
-                            <Volume2Icon size={20} />
-                            <span>Respuesta del RAG (Ollama)</span>
-                        </h2>
-                        <p className="text-gray-700 whitespace-pre-wrap">{response}</p>
+                {/* Área de Respuesta RAG (Muestra si ragResult tiene datos) */}
+                {ragResult && (
+                    <div className="w-full border-t border-gray-200 pt-6 mt-6 space-y-6">
+
+                        {/* Metadatos de Fuente */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm bg-blue-50/50 p-4 rounded-lg border border-blue-100">
+                            <p className="font-semibold text-gray-700 flex items-center space-x-2">
+                                <ClipboardIcon size={16} className="text-blue-500"/>
+                                <span>Fuente:</span>
+                                <span className="text-blue-700 font-bold break-all">{ragResult.source || 'Desconocida'}</span>
+                            </p>
+                            <p className="font-semibold text-gray-700 flex items-center space-x-2">
+                                <InfoIcon size={16} className="text-blue-500"/>
+                                <span>Sección (ID):</span>
+                                <span className="text-blue-700 font-bold break-all">{ragResult.seccion || 'N/A'}</span>
+                            </p>
+                        </div>
+                        
+                        {/* Respuesta Generada */}
+                        <div className="bg-white p-5 rounded-xl shadow-lg border border-gray-200">
+                            <h2 className="text-lg font-bold text-gray-800 border-b pb-2 mb-3 flex items-center space-x-2">
+                                <Volume2Icon size={20} className="text-green-600"/>
+                                <span>Respuesta Generada</span>
+                            </h2>
+                            {/* Usamos dangerouslySetInnerHTML para renderizar el HTML limpio del backend (e.g., <strong>) */}
+                            <div 
+                                className="text-gray-700 leading-relaxed space-y-3"
+                                dangerouslySetInnerHTML={{ __html: ragResult.answer || 'Respuesta no disponible.' }}
+                            ></div>
+                        </div>
+
+                        {/* Contexto Recuperado */}
+                        <div className="bg-gray-100 p-5 rounded-xl shadow-inner border border-gray-300">
+                            <h2 className="text-lg font-bold text-gray-800 border-b pb-2 mb-3">Contexto de la Fuente</h2>
+                            <pre className="whitespace-pre-wrap font-mono text-xs text-gray-600 bg-gray-50 p-3 rounded-lg border border-gray-200 max-h-48 overflow-y-auto">
+                                {ragResult.context || 'Contexto no disponible.'}
+                            </pre>
+                        </div>
+
                     </div>
                 )}
             </div>
