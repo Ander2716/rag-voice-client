@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 
 // 🚨 IMPORTANTE: REEMPLAZA ESTA URL CON TU CLOUDFLARE TUNNEL ACTIVA
-const API_URL = "https://codes-bruce-attempts-your.trycloudflare.com/ask"; 
+const API_URL = "https://mineral-aging-scratch-rna.trycloudflare.com/ask"; 
 
 const App = () => {
     // --- ESTADOS DE LA APLICACIÓN ---
