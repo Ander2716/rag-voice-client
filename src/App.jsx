@@ -116,11 +116,10 @@ const App = () => {
     const [response, setResponse] = useState(null);
     const [sttSupported, setSttSupported] = useState(false);
     
-    // Referencias para MediaRecorder y SpeechRecognition
-    const mediaRecorderRef = useRef(null);
+    // Referencia SOLO para SpeechRecognition (MediaRecorder eliminada)
     const recognitionRef = useRef(null);
 
-    // FIX: Referencia para el estado más reciente (evita clausuras obsoletas)
+    // Referencia para el estado más reciente (evita clausuras obsoletas)
     const appStateRef = useRef(appState);
     useEffect(() => {
         appStateRef.current = appState;
@@ -128,7 +127,6 @@ const App = () => {
 
 
     // Inicialización y configuración del STT
-    // Este efecto ahora corre una sola vez al montar.
     useEffect(() => {
         if (SpeechRecognition) {
             setSttSupported(true);
@@ -137,12 +135,11 @@ const App = () => {
             recognitionRef.current.interimResults = false;
             recognitionRef.current.lang = 'es-ES'; 
             
-            // Cuando la transcripción está lista: ¡NO ENVIAR, SÓLO MOSTRAR!
+            // Cuando la transcripción está lista: ¡MOSTRAR!
             recognitionRef.current.onresult = (event) => {
                 const last = event.results.length - 1;
                 const transcript = event.results[last][0].transcript;
                 
-                // Usar appStateRef.current para el estado actual
                 if (transcript && appStateRef.current === STATES.TRANSCRIBING) {
                     setQuery(transcript); 
                     setAppState(STATES.READY_TO_SEND);
@@ -156,7 +153,7 @@ const App = () => {
 
             // Manejo de errores de transcripción
             recognitionRef.current.onerror = (event) => {
-                const currentState = appStateRef.current; // Obtener el estado actual
+                const currentState = appStateRef.current;
                 
                 if (event.error !== 'no-speech' && currentState !== STATES.IDLE) {
                     console.error('Speech Recognition Error:', event.error);
@@ -165,7 +162,6 @@ const App = () => {
                     setStatus("No se detectó voz o la grabación fue muy corta.");
                 }
                 
-                // Si hay error, y no estamos en IDLE (por abortar o similar), volvemos a IDLE
                 if (currentState !== STATES.IDLE) { 
                     setAppState(STATES.IDLE);
                 }
@@ -173,9 +169,7 @@ const App = () => {
 
             // Cuando el reconocimiento de voz termina (si no hubo resultado)
             recognitionRef.current.onend = () => {
-                // Usar appStateRef.current para el estado actual
                 if (appStateRef.current === STATES.TRANSCRIBING) {
-                    // Si el estado sigue en TRANSCRIBING significa que onresult/onerror no se disparó
                     setStatus("Procesamiento finalizado sin transcripción.");
                     setAppState(STATES.IDLE);
                 }
@@ -184,7 +178,7 @@ const App = () => {
             setSttSupported(false);
             setStatus("❌ Error: Tu navegador no soporta el reconocimiento de voz.");
         }
-    }, []); // El efecto se ejecuta solo al montar: []
+    }, []); 
 
     // ====================================================================
     // FLUJO DE ESTADOS
@@ -202,8 +196,6 @@ const App = () => {
         setStatus(`Enviando: "${textQuery}" a la API RAG...`);
 
         const payload = { query: textQuery };
-
-        // Simulamos un backoff exponencial simple para evitar spam a la API
         const maxRetries = 3;
         let lastError = null;
 
@@ -235,70 +227,51 @@ const App = () => {
                 lastError = error;
                 console.error(`Intento ${attempt + 1} fallido.`, error);
                 if (attempt < maxRetries - 1) {
-                    // Esperar 1s, 2s
                     const delay = Math.pow(2, attempt) * 1000;
                     await new Promise(resolve => setTimeout(resolve, delay));
                 }
             }
         }
         
-        // Si el loop termina sin éxito (todos los intentos fallaron):
         console.error("Fallo final después de reintentos.", lastError);
         setStatus("Hubo un error al comunicarse con la API. Asegúrate de que el túnel de Cloudflare esté activo y la URL sea correcta.");
         setResponse(null);
-
         setAppState(STATES.IDLE);
     };
 
 
-    // Helper: Iniciar Grabación
-    const startRecording = async () => {
+    // Helper: Iniciar Grabación (Solo usa SpeechRecognition)
+    const startRecording = () => {
         if (!sttSupported) return; 
         
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            
-            // Inicia MediaRecorder para mantener el micrófono activo (necesario en algunos navegadores)
-            mediaRecorderRef.current = new MediaRecorder(stream);
-            mediaRecorderRef.current.start();
-            
-            // Inicia el reconocimiento de voz
+            // SpeechRecognition.start() se encarga de pedir permisos y comenzar a escuchar.
             recognitionRef.current.start();
             
             setAppState(STATES.RECORDING);
             setStatus("🔴 Grabando... Presiona DETENER.");
 
-            // Detener el MediaRecorder y liberar el stream
-            mediaRecorderRef.current.onstop = () => {
-                stream.getTracks().forEach(track => track.stop());
-            };
-
         } catch (err) {
-            console.error("Error al acceder al micrófono:", err);
-            setStatus("Error: No se pudo acceder al micrófono. Verifica permisos.");
+            // Ignoramos el error común 'InvalidStateError: recognition has already started'
+            if (err.name === 'InvalidStateError' && err.message.includes('recognition has already started')) {
+                // Ya está grabando, no hacemos nada.
+                return;
+            }
+            console.error("Error al iniciar el micrófono:", err);
+            setStatus("Error: No se pudo iniciar el micrófono. Verifica permisos.");
             setAppState(STATES.IDLE);
         }
     };
 
-    // Helper: Detener Grabación y Procesar Transcripción
+    // Helper: Detener Grabación y Procesar Transcripción (Solo usa SpeechRecognition)
     const stopRecording = () => {
         if (appState === STATES.RECORDING) {
-            // 1. Detiene la grabación de audio
-            if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-                mediaRecorderRef.current.stop();
+            // Detenemos el reconocimiento de voz. onresult/onerror se disparará a continuación.
+            if (recognitionRef.current) {
+                recognitionRef.current.stop(); 
             }
-            
             setAppState(STATES.TRANSCRIBING);
             setStatus("Procesando transcripción...");
-
-            // 2. FIX CLAVE PARA CHROME ANDROID: 
-            // Introducir un retraso mínimo antes de detener la API de Speech Recognition
-            // Esto asegura que haya tiempo para que el audio grabado se envíe al motor de STT.
-            setTimeout(() => {
-                if (recognitionRef.current) {
-                    recognitionRef.current.stop(); 
-                }
-            }, 50); // 50 milisegundos de retraso
         }
     };
     
@@ -306,11 +279,8 @@ const App = () => {
     const cancelOperation = () => {
         // 1. Si está grabando o transcribiendo: Abortar procesos
         if (appState === STATES.RECORDING || appState === STATES.TRANSCRIBING) {
-            if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-                mediaRecorderRef.current.stop();
-            }
             if (recognitionRef.current) {
-                // Abort detiene sin disparar onresult/onend, lo cual es correcto para cancelar
+                // Abort detiene el servicio inmediatamente.
                 recognitionRef.current.abort(); 
             }
             setStatus("Grabación/Procesamiento cancelado.");
