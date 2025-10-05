@@ -124,6 +124,12 @@ const App = () => {
     useEffect(() => {
         appStateRef.current = appState;
     }, [appState]);
+    
+    // CORRECCIÓN: Referencia para el query más reciente para evitar el race condition
+    const queryRef = useRef(query);
+    useEffect(() => {
+        queryRef.current = query;
+    }, [query]);
 
 
     // Inicialización y configuración del STT
@@ -140,8 +146,10 @@ const App = () => {
                 const last = event.results.length - 1;
                 const transcript = event.results[last][0].transcript;
                 
+                // Si hay texto Y estamos esperando una transcripción, la guardamos y pasamos a READY_TO_SEND
                 if (transcript && appStateRef.current === STATES.TRANSCRIBING) {
                     setQuery(transcript); 
+                    // Esta es la clave: el botón cambia aquí a ENVIAR
                     setAppState(STATES.READY_TO_SEND);
                     setStatus("📝 Revisa, edita y presiona ENVIAR.");
                 } else if (appStateRef.current === STATES.TRANSCRIBING) {
@@ -167,10 +175,13 @@ const App = () => {
                 }
             };
 
-            // Cuando el reconocimiento de voz termina (si no hubo resultado)
+            // Cuando el reconocimiento de voz termina (CORRECCIÓN CLAVE)
             recognitionRef.current.onend = () => {
-                // Solo si estábamos esperando una transcripción, volvemos a IDLE
-                if (appStateRef.current === STATES.TRANSCRIBING) {
+                // Si el estado sigue siendo TRANSCRIBING y la query está vacía (fallo), 
+                // volvemos a IDLE.
+                // Si la query tiene texto (éxito), asumimos que onresult ya cambió el estado a READY_TO_SEND
+                // y no hacemos nada para evitar anular el estado de envío.
+                if (appStateRef.current === STATES.TRANSCRIBING && !queryRef.current) {
                     setStatus("Procesamiento finalizado sin transcripción.");
                     setAppState(STATES.IDLE);
                 }
@@ -245,8 +256,11 @@ const App = () => {
     const startRecording = () => {
         if (!sttSupported) return; 
         
+        // Resetear la query antes de empezar
+        setQuery("");
+        setResponse(null);
+        
         try {
-            // SpeechRecognition.start() se encarga de pedir permisos y comenzar a escuchar.
             recognitionRef.current.start();
             
             setAppState(STATES.RECORDING);
@@ -255,7 +269,6 @@ const App = () => {
         } catch (err) {
             // Ignoramos el error común 'InvalidStateError: recognition has already started'
             if (err.name === 'InvalidStateError' && err.message.includes('recognition has already started')) {
-                // Ya está grabando, no hacemos nada.
                 return;
             }
             console.error("Error al iniciar el micrófono:", err);
@@ -281,7 +294,6 @@ const App = () => {
         // 1. Si está grabando o transcribiendo: Abortar procesos
         if (appState === STATES.RECORDING || appState === STATES.TRANSCRIBING) {
             if (recognitionRef.current) {
-                // Abort detiene el servicio inmediatamente.
                 recognitionRef.current.abort(); 
             }
             setStatus("Grabación/Procesamiento cancelado.");
@@ -320,6 +332,7 @@ const App = () => {
             return `${base} bg-gray-600 hover:bg-gray-700 ring-4 ring-gray-300 transform scale-105`;
         }
         if (appState === STATES.READY_TO_SEND) {
+            // Estado de ENVIAR (Botón verde)
             return `${base} bg-green-600 hover:bg-green-700 ring-4 ring-green-300 transform scale-105`;
         }
         // IDLE
@@ -398,7 +411,7 @@ const App = () => {
                             Tu Consulta:
                         </label>
                         <textarea
-                            className="w-full text-sm text-gray-800 bg-white p-3 rounded-md border focus:ring-blue-500 focus:border-blue-500 resize-none"
+                            className="w-full text-sm text-gray-800 bg-white p-3 rounded-md border focus:ring-green-500 focus:border-green-500 resize-none"
                             rows={3}
                             placeholder={appState === STATES.READY_TO_SEND ? "Edita la transcripción aquí..." : "Graba tu consulta para empezar..."}
                             value={query}
