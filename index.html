@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Asistente RAG por Voz</title>
+    
+    <!-- Enlace para la fuente Inter (recomendada) -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap" rel="stylesheet">
+    
+    <!-- Script de Tailwind CSS CDN para habilitar todas las clases -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Configuración para usar la fuente Inter y asegurar que la app ocupe el 100% de la pantalla -->
+    <style>
+      body {
+        font-family: 'Inter', sans-serif;
+      }
+      /* Configuración mínima para que el contenedor principal ocupe toda la pantalla */
+      html, body, #root {
+        height: 100%;
+        margin: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
