@@ -72,12 +72,6 @@ const CloudOffIcon = (props) => (
     </IconWrapper>
 );
 
-const SlashIcon = (props) => (
-    <IconWrapper {...props}>
-        <path d="M2 22 22 2"/>
-    </IconWrapper>
-);
-
 const SquareIcon = (props) => (
     <IconWrapper {...props}>
         <rect width="18" height="18" x="3" y="3" rx="2" ry="2"/>
@@ -116,20 +110,15 @@ const App = () => {
     const [response, setResponse] = useState(null);
     const [sttSupported, setSttSupported] = useState(false);
     
-    // Referencia SOLO para SpeechRecognition 
+    // Referencias para evitar problemas de sincronización con la API nativa
     const recognitionRef = useRef(null);
-
-    // Referencia para el estado más reciente (evita clausuras obsoletas)
     const appStateRef = useRef(appState);
+    const queryRef = useRef(query);
+
     useEffect(() => {
         appStateRef.current = appState;
-    }, [appState]);
-    
-    // CORRECCIÓN: Referencia para el query más reciente para evitar el race condition
-    const queryRef = useRef(query);
-    useEffect(() => {
         queryRef.current = query;
-    }, [query]);
+    }, [appState, query]);
 
 
     // Inicialización y configuración del STT
@@ -141,25 +130,23 @@ const App = () => {
             recognitionRef.current.interimResults = false;
             recognitionRef.current.lang = 'es-ES'; 
             
-            // Cuando la transcripción está lista: ¡MOSTRAR!
+            // --- EVENTO DE RESULTADO ---
             recognitionRef.current.onresult = (event) => {
                 const last = event.results.length - 1;
                 const transcript = event.results[last][0].transcript;
                 
-                // Si hay texto Y estamos esperando una transcripción, la guardamos y pasamos a READY_TO_SEND
                 if (transcript && appStateRef.current === STATES.TRANSCRIBING) {
                     setQuery(transcript); 
-                    // Esta es la clave: el botón cambia aquí a ENVIAR
+                    // Transición a READY_TO_SEND para habilitar el botón "Enviar"
                     setAppState(STATES.READY_TO_SEND);
-                    setStatus("📝 Revisa, edita y presiona ENVIAR.");
+                    setStatus("📝 Transcripción lista. Edita y presiona ENVIAR.");
                 } else if (appStateRef.current === STATES.TRANSCRIBING) {
-                    // Transcripción vacía, volver a IDLE
                     setStatus("No se detectó voz. Listo para grabar...");
                     setAppState(STATES.IDLE);
                 }
             };
 
-            // Manejo de errores de transcripción
+            // --- MANEJO DE ERRORES ---
             recognitionRef.current.onerror = (event) => {
                 const currentState = appStateRef.current;
                 
@@ -170,17 +157,18 @@ const App = () => {
                     setStatus("No se detectó voz o la grabación fue muy corta.");
                 }
                 
-                if (currentState !== STATES.IDLE) { 
+                // Forzamos el reset a IDLE si no estábamos ya en un estado final (READY_TO_SEND o LOADING)
+                if (currentState !== STATES.IDLE && currentState !== STATES.READY_TO_SEND && currentState !== STATES.LOADING) { 
                     setAppState(STATES.IDLE);
                 }
             };
 
-            // Cuando el reconocimiento de voz termina (CORRECCIÓN CLAVE)
+            // --- FIN DEL RECONOCIMIENTO (CORRECCIÓN CLAVE) ---
             recognitionRef.current.onend = () => {
-                // Si el estado sigue siendo TRANSCRIBING y la query está vacía (fallo), 
-                // volvemos a IDLE.
-                // Si la query tiene texto (éxito), asumimos que onresult ya cambió el estado a READY_TO_SEND
-                // y no hacemos nada para evitar anular el estado de envío.
+                // Si el estado es TRANSCRIBING y no se obtuvo texto (queryRef.current está vacío),
+                // significa que onresult falló o no se disparó. Volvemos a IDLE.
+                // Si ya estamos en READY_TO_SEND (porque onresult fue exitoso), no hacemos nada aquí
+                // para evitar anular el estado de envío.
                 if (appStateRef.current === STATES.TRANSCRIBING && !queryRef.current) {
                     setStatus("Procesamiento finalizado sin transcripción.");
                     setAppState(STATES.IDLE);
@@ -193,10 +181,9 @@ const App = () => {
     }, []); 
 
     // ====================================================================
-    // FLUJO DE ESTADOS
+    // FLUJO DE ESTADOS Y API RAG
     // ====================================================================
 
-    // Función para enviar la consulta (EDITABLE) a la API RAG
     const sendQueryToApi = async (textQuery) => {
         if (!textQuery) {
             setStatus("La consulta está vacía. Graba o escribe algo.");
@@ -233,8 +220,9 @@ const App = () => {
                     setStatus("Error de formato de respuesta.");
                 }
                 
+                // Tras el éxito, volvemos a IDLE, pero manteniendo la respuesta y la query
                 setAppState(STATES.IDLE); 
-                return; // Éxito, salir de la función
+                return; 
             } catch (error) {
                 lastError = error;
                 console.error(`Intento ${attempt + 1} fallido.`, error);
@@ -246,41 +234,34 @@ const App = () => {
         }
         
         console.error("Fallo final después de reintentos.", lastError);
-        setStatus("Hubo un error al comunicarse con la API. Asegúrate de que el túnel de Cloudflare esté activo y la URL sea correcta.");
+        setStatus("Hubo un error al comunicarse con la API. Revisa la URL y el túnel de Cloudflare.");
         setResponse(null);
         setAppState(STATES.IDLE);
     };
 
 
-    // Helper: Iniciar Grabación (Solo usa SpeechRecognition)
-    const startRecording = () => {
-        if (!sttSupported) return; 
-        
-        // Resetear la query antes de empezar
-        setQuery("");
-        setResponse(null);
-        
-        try {
-            recognitionRef.current.start();
+    // --- 1. Grabar / Detener ---
+    const handleRecordStopClick = () => {
+        if (!sttSupported) return;
+
+        if (appState === STATES.IDLE) {
+            // Iniciar Grabación
+            setQuery(""); // Limpiamos la consulta anterior
+            setResponse(null); // Limpiamos la respuesta anterior
             
-            setAppState(STATES.RECORDING);
-            setStatus("🔴 Grabando... Presiona DETENER.");
-
-        } catch (err) {
-            // Ignoramos el error común 'InvalidStateError: recognition has already started'
-            if (err.name === 'InvalidStateError' && err.message.includes('recognition has already started')) {
-                return;
+            try {
+                recognitionRef.current.start();
+                setAppState(STATES.RECORDING);
+                setStatus("🔴 Grabando... Presiona para DETENER.");
+            } catch (err) {
+                if (err.name !== 'InvalidStateError') {
+                    console.error("Error al iniciar el micrófono:", err);
+                    setStatus("Error: No se pudo iniciar el micrófono. Verifica permisos.");
+                    setAppState(STATES.IDLE);
+                }
             }
-            console.error("Error al iniciar el micrófono:", err);
-            setStatus("Error: No se pudo iniciar el micrófono. Verifica permisos.");
-            setAppState(STATES.IDLE);
-        }
-    };
-
-    // Helper: Detener Grabación y Procesar Transcripción (Solo usa SpeechRecognition)
-    const stopRecording = () => {
-        if (appState === STATES.RECORDING) {
-            // Detenemos el reconocimiento de voz. onresult/onerror se disparará a continuación.
+        } else if (appState === STATES.RECORDING) {
+            // Detener Grabación y Procesar
             if (recognitionRef.current) {
                 recognitionRef.current.stop(); 
             }
@@ -289,80 +270,74 @@ const App = () => {
         }
     };
     
-    // Función de Cancelación
-    const cancelOperation = () => {
-        // 1. Si está grabando o transcribiendo: Abortar procesos
+    // --- 2. Enviar Consulta ---
+    const handleSendClick = () => {
+        if (appState === STATES.READY_TO_SEND) {
+            sendQueryToApi(query);
+        }
+    };
+    
+    // --- 3. Cancelar / Reiniciar ---
+    const handleCancelClick = () => {
+        // Abortar si está grabando o transcribiendo
         if (appState === STATES.RECORDING || appState === STATES.TRANSCRIBING) {
             if (recognitionRef.current) {
                 recognitionRef.current.abort(); 
             }
-            setStatus("Grabación/Procesamiento cancelado.");
         } 
         
-        // 2. Resetear todo el estado para volver a IDLE
+        // Resetear todo el estado
         setAppState(STATES.IDLE);
         setQuery(""); 
         setResponse(null);
         setStatus("Listo para grabar...");
     }
 
-    // Lógica del botón principal de acción (Micrófono/Detener/Enviar)
-    const handleMainButtonClick = () => {
-        if (appState === STATES.IDLE) {
-            startRecording();
-        } else if (appState === STATES.RECORDING) {
-            stopRecording();
-        } else if (appState === STATES.READY_TO_SEND) {
-            sendQueryToApi(query); // Envía la consulta actual (editada o no)
-        }
-        // No hace nada en estados TRANSCRIBING o LOADING
-    };
-    
     // ====================================================================
-    // ESTILOS DINÁMICOS
+    // ESTILOS DINÁMICOS Y CONTENIDO
     // ====================================================================
 
-    const getButtonStyles = () => {
+    // Estilos para el botón principal (Grabar/Detener)
+    const getMainButtonStyles = () => {
         let base = "relative w-28 h-28 flex items-center justify-center rounded-full transition-all duration-300 shadow-xl text-white";
         
-        if (appState === STATES.LOADING || appState === STATES.TRANSCRIBING) {
-            return `${base} bg-gray-400 cursor-not-allowed`;
-        }
         if (appState === STATES.RECORDING) {
-            return `${base} bg-gray-600 hover:bg-gray-700 ring-4 ring-gray-300 transform scale-105`;
+            return `${base} bg-red-600 hover:bg-red-700 ring-4 ring-red-300 transform scale-105`;
         }
-        if (appState === STATES.READY_TO_SEND) {
-            // Estado de ENVIAR (Botón verde)
-            return `${base} bg-green-600 hover:bg-green-700 ring-4 ring-green-300 transform scale-105`;
-        }
-        // IDLE
+        // IDLE, READY_TO_SEND, etc.
         return `${base} bg-blue-600 hover:bg-blue-700 ring-4 ring-blue-300`;
     };
 
-    const getButtonContent = () => {
-        if (appState === STATES.LOADING) {
-            return <RotateCcwIcon size={32} className="animate-spin" />;
-        }
-        if (appState === STATES.TRANSCRIBING) {
-            return <RotateCcwIcon size={32} className="animate-spin" />;
-        }
+    const getMainButtonContent = () => {
         if (appState === STATES.RECORDING) {
             return <SquareIcon size={32} />; // Icono de detener
         }
-        if (appState === STATES.READY_TO_SEND) {
-            return <SendIcon size={32} />; // Icono de enviar
-        }
-        // IDLE
         return <MicIcon size={32} />; // Icono de micrófono
     };
+    
+    // Estilos para el botón de Enviar
+    const getSendButtonClasses = () => {
+        const disabled = appState !== STATES.READY_TO_SEND || query.length === 0;
+        return `px-6 py-2 rounded-full font-semibold transition-colors duration-200 flex items-center justify-center space-x-2 w-full md:w-auto
+            ${disabled 
+                ? 'bg-gray-300 text-gray-500 cursor-not-allowed' 
+                : 'bg-green-600 text-white hover:bg-green-700 shadow-md'}`;
+    }
+    
+    // Estilos para el botón de Cancelar
+    const getCancelButtonClasses = () => {
+        const disabled = appState === STATES.IDLE || appState === STATES.LOADING;
+        return `px-6 py-2 rounded-full font-semibold transition-colors duration-200 flex items-center justify-center space-x-2 w-full md:w-auto
+            ${disabled 
+                ? 'bg-gray-300 text-gray-500 cursor-not-allowed' 
+                : 'bg-red-600 text-white hover:bg-red-700 shadow-md'}`;
+    }
 
-    const getButtonLabel = () => {
-        if (appState === STATES.RECORDING) return "Detener";
-        if (appState === STATES.READY_TO_SEND) return "Enviar Consulta";
-        return "Grabar Consulta";
-    };
+    // Deshabilita el botón principal solo cuando está en proceso no interactivo
+    const isMainButtonDisabled = appState === STATES.LOADING || appState === STATES.TRANSCRIBING || !sttSupported;
 
-    const isButtonDisabled = appState === STATES.LOADING || appState === STATES.TRANSCRIBING || !sttSupported;
+    // Deshabilita el área de texto solo si no estamos en READY_TO_SEND (para edición)
+    const isTextareaDisabled = appState !== STATES.READY_TO_SEND;
 
 
     return (
@@ -395,7 +370,10 @@ const App = () => {
                 {/* Área de estado y consulta */}
                 <div className="w-full bg-blue-50/50 border border-blue-100 rounded-lg p-4 space-y-3">
                     <div className="flex items-center space-x-2 text-sm font-medium">
-                        {sttSupported ? (
+                        {(appState === STATES.LOADING || appState === STATES.TRANSCRIBING) && (
+                            <RotateCcwIcon size={16} className="text-orange-500 animate-spin" />
+                        )}
+                        {(appState !== STATES.LOADING && appState !== STATES.TRANSCRIBING) && sttSupported ? (
                              <InfoIcon size={16} className="text-blue-600" />
                         ) : (
                              <CloudOffIcon size={16} className="text-red-600" />
@@ -405,51 +383,68 @@ const App = () => {
                             {status}
                         </span>
                     </div>
-                    {/* Campo de Consulta (Editable solo en READY_TO_SEND) */}
+                    {/* Campo de Consulta */}
                     <div className="w-full">
                         <label className="text-xs font-semibold text-gray-500 block mb-1">
-                            Tu Consulta:
+                            Consulta ({isTextareaDisabled ? "Solo Lectura" : "Editable"}):
                         </label>
                         <textarea
-                            className="w-full text-sm text-gray-800 bg-white p-3 rounded-md border focus:ring-green-500 focus:border-green-500 resize-none"
+                            className={`w-full text-sm text-gray-800 p-3 rounded-md border resize-none ${isTextareaDisabled ? 'bg-gray-100 text-gray-500' : 'bg-white focus:ring-green-500 focus:border-green-500'}`}
                             rows={3}
-                            placeholder={appState === STATES.READY_TO_SEND ? "Edita la transcripción aquí..." : "Graba tu consulta para empezar..."}
+                            placeholder={appState === STATES.READY_TO_SEND ? "Edita la transcripción aquí antes de enviar..." : "Graba tu consulta para empezar..."}
                             value={query}
                             onChange={(e) => setQuery(e.target.value)}
-                            disabled={appState !== STATES.READY_TO_SEND}
+                            disabled={isTextareaDisabled}
                         />
                     </div>
                 </div>
 
-                {/* Botón de Acción Central */}
-                <div className="relative flex justify-center items-center py-6">
-                    {(appState === STATES.RECORDING || appState === STATES.TRANSCRIBING) && (
-                        <div className="absolute w-32 h-32 bg-red-400 rounded-full opacity-50 pulse-effect"></div>
-                    )}
-                    <button
-                        onClick={handleMainButtonClick}
-                        disabled={isButtonDisabled}
-                        className={getButtonStyles()}
-                    >
-                        {getButtonContent()}
-                    </button>
-                </div>
-                
-                {/* Controles bajo el micrófono (Etiqueta y Cancelar) */}
-                <div className="flex justify-center w-full space-x-4 h-6 items-center">
-                    <p className="text-sm text-gray-500 font-medium">
-                        {getButtonLabel()}
-                    </p>
+                {/* Área de Botones de Acción */}
+                <div className="flex flex-col items-center space-y-4 w-full">
                     
-                    {(appState === STATES.RECORDING || appState === STATES.TRANSCRIBING || appState === STATES.READY_TO_SEND) && (
-                        <button 
-                            onClick={cancelOperation} 
-                            className="text-sm font-medium text-red-600 hover:text-red-800 transition duration-150 flex items-center space-x-1"
+                    {/* Botón Central: GRABAR / DETENER */}
+                    <div className="relative flex justify-center items-center">
+                        {appState === STATES.RECORDING && (
+                            <div className="absolute w-32 h-32 bg-red-400 rounded-full opacity-50 pulse-effect"></div>
+                        )}
+                        <button
+                            onClick={handleRecordStopClick}
+                            disabled={isMainButtonDisabled}
+                            className={getMainButtonStyles()}
+                            title={appState === STATES.RECORDING ? "Detener Grabación" : "Iniciar Grabación"}
                         >
-                            <SlashIcon size={16} />
+                            {getMainButtonContent()}
+                        </button>
+                    </div>
+                    
+                    <p className="text-sm text-gray-500 font-medium">
+                        {appState === STATES.RECORDING ? "Presiona para DETENER" : "Presiona para GRABAR"}
+                    </p>
+
+                    {/* Botones Secundarios: ENVIAR y CANCELAR */}
+                    <div className="flex space-x-4 w-full justify-center mt-4">
+                        
+                        {/* Botón de Enviar Consulta */}
+                        <button
+                            onClick={handleSendClick}
+                            disabled={appState !== STATES.READY_TO_SEND || query.length === 0 || appState === STATES.LOADING}
+                            className={getSendButtonClasses()}
+                        >
+                            <SendIcon size={20} />
+                            <span>Enviar</span>
+                        </button>
+
+                        {/* Botón de Cancelar */}
+                        <button 
+                            onClick={handleCancelClick}
+                            disabled={appState === STATES.IDLE || appState === STATES.LOADING}
+                            className={getCancelButtonClasses()}
+                        >
+                            <XIcon size={20} />
                             <span>Cancelar</span>
                         </button>
-                    )}
+                    </div>
+
                 </div>
 
                 {/* Área de Respuesta RAG */}
@@ -462,15 +457,6 @@ const App = () => {
                         <p className="text-gray-700 whitespace-pre-wrap">{response}</p>
                     </div>
                 )}
-                
-                {/* Botón de Reset completo */}
-                <button 
-                    onClick={cancelOperation} // Usamos cancelOperation para reiniciar todo
-                    className="mt-4 text-sm text-gray-500 hover:text-red-500 transition duration-150 flex items-center space-x-1"
-                >
-                    <XIcon size={16} />
-                    <span>Reiniciar Aplicación</span>
-                </button>
             </div>
         </div>
     );
