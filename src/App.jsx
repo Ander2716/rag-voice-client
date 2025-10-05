@@ -1,5 +1,89 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Mic, Send, RotateCcw, X, Volume2, Info, CloudOff, Slash, Square } from 'lucide-react';
+
+// ====================================================================
+// COMPONENTES DE ICONOS SVG LOCALES (Reemplazan lucide-react)
+// ====================================================================
+
+const IconWrapper = ({ children, size, className }) => (
+    <svg 
+        xmlns="http://www.w3.org/2000/svg" 
+        width={size} 
+        height={size} 
+        viewBox="0 0 24 24" 
+        fill="none" 
+        stroke="currentColor" 
+        strokeWidth="2" 
+        strokeLinecap="round" 
+        strokeLinejoin="round" 
+        className={className}
+    >
+        {children}
+    </svg>
+);
+
+const MicIcon = (props) => (
+    <IconWrapper {...props}>
+        <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+        <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+        <line x1="12" x2="12" y1="19" y2="22"/>
+    </IconWrapper>
+);
+
+const SendIcon = (props) => (
+    <IconWrapper {...props}>
+        <path d="m22 2-7 20-4-9-5-2.5 7-7Z"/>
+        <path d="M22 2 11 13"/>
+    </IconWrapper>
+);
+
+const RotateCcwIcon = (props) => (
+    <IconWrapper {...props}>
+        <path d="M3 6V3h3"/><path d="M3 6a10 10 0 0 1 17.8 8c-2.4 0-4.6 1-6.1 2.8"/>
+    </IconWrapper>
+); 
+
+const XIcon = (props) => (
+    <IconWrapper {...props}>
+        <path d="M18 6 6 18"/><path d="m6 6 12 12"/>
+    </IconWrapper>
+);
+
+const Volume2Icon = (props) => (
+    <IconWrapper {...props}>
+        <path d="M11 5L6 9H2v6h4l5 4V5z"/>
+        <path d="M15.54 8.46a7 7 0 0 1 0 7.08"/>
+    </IconWrapper>
+);
+
+const InfoIcon = (props) => (
+    <IconWrapper {...props}>
+        <circle cx="12" cy="12" r="10"/>
+        <path d="M12 16v-4"/>
+        <path d="M12 8h.01"/>
+    </IconWrapper>
+);
+
+const CloudOffIcon = (props) => (
+    <IconWrapper {...props}>
+        <path d="M22 17.5a2.5 2.5 0 0 0-2.5-2.5h-2.1a3 3 0 0 0-5.83-1.04"/>
+        <path d="M16 9.4a5 5 0 0 0-4.5-2.4h-0.1"/>
+        <path d="M10.3 5.4c-.4-.1-.8-.2-1.2-.2a5 5 0 0 0-4 2.1c-.8 1.4-1.2 3.1-1.2 5a6 6 0 0 0 1.9 4.3"/>
+        <line x1="2" x2="22" y1="2" y2="22"/>
+    </IconWrapper>
+);
+
+const SlashIcon = (props) => (
+    <IconWrapper {...props}>
+        <path d="M2 22 22 2"/>
+    </IconWrapper>
+);
+
+const SquareIcon = (props) => (
+    <IconWrapper {...props}>
+        <rect width="18" height="18" x="3" y="3" rx="2" ry="2"/>
+    </IconWrapper>
+);
+
 
 // Inicialización de la API de Reconocimiento de Voz
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -18,7 +102,7 @@ const STATES = {
 // ====================================================================
 
 // ESTA URL DEBE APUNTAR A TU TUNEL DE CLOUDFLARE + /ask
-const API_URL = "https://mineral-aging-scratch-rna.trycloudflare.com/ask"; 
+const API_URL = "https://tu-url-de-cloudflare.trycloudflare.com/ask"; 
 // 🚨 ATENCIÓN: Por favor, reemplaza la URL anterior por tu URL ACTIVA
 
 // ====================================================================
@@ -108,6 +192,8 @@ const App = () => {
         const payload = { query: textQuery };
 
         try {
+            // Nota: Este fetch DEBE ser envuelto en un loop de backoff exponencial en un entorno de producción
+            // para manejar la limitación de velocidad de la API, pero lo mantenemos simple aquí.
             const res = await fetch(API_URL, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -237,19 +323,19 @@ const App = () => {
 
     const getButtonContent = () => {
         if (appState === STATES.LOADING) {
-            return <RotateCcw size={32} className="animate-spin" />;
+            return <RotateCcwIcon size={32} className="animate-spin" />;
         }
         if (appState === STATES.TRANSCRIBING) {
-            return <RotateCcw size={32} className="animate-spin" />;
+            return <RotateCcwIcon size={32} className="animate-spin" />;
         }
         if (appState === STATES.RECORDING) {
-            return <Square size={32} />; // Icono de detener
+            return <SquareIcon size={32} />; // Icono de detener
         }
         if (appState === STATES.READY_TO_SEND) {
-            return <Send size={32} />; // Icono de enviar
+            return <SendIcon size={32} />; // Icono de enviar
         }
         // IDLE
-        return <Mic size={32} />; // Icono de micrófono
+        return <MicIcon size={32} />; // Icono de micrófono
     };
 
     const getButtonLabel = () => {
@@ -292,9 +378,9 @@ const App = () => {
                 <div className="w-full bg-blue-50/50 border border-blue-100 rounded-lg p-4 space-y-3">
                     <div className="flex items-center space-x-2 text-sm font-medium">
                         {sttSupported ? (
-                             <Info size={16} className="text-blue-600" />
+                             <InfoIcon size={16} className="text-blue-600" />
                         ) : (
-                             <CloudOff size={16} className="text-red-600" />
+                             <CloudOffIcon size={16} className="text-red-600" />
                         )}
                        
                         <span className={`text-gray-700 ${appState === STATES.LOADING || appState === STATES.TRANSCRIBING ? 'text-orange-500 font-semibold' : ''}`}>
@@ -342,7 +428,7 @@ const App = () => {
                             onClick={cancelOperation} 
                             className="text-sm font-medium text-red-600 hover:text-red-800 transition duration-150 flex items-center space-x-1"
                         >
-                            <Slash size={16} />
+                            <SlashIcon size={16} />
                             <span>Cancelar</span>
                         </button>
                     )}
@@ -352,7 +438,7 @@ const App = () => {
                 {response && (
                     <div className="w-full bg-white border-t-4 border-blue-500 rounded-lg p-5 shadow-lg space-y-3 mt-6">
                         <h2 className="text-lg font-bold text-blue-700 flex items-center space-x-2">
-                            <Volume2 size={20} />
+                            <Volume2Icon size={20} />
                             <span>Respuesta del RAG (Ollama)</span>
                         </h2>
                         <p className="text-gray-700 whitespace-pre-wrap">{response}</p>
@@ -364,7 +450,7 @@ const App = () => {
                     onClick={cancelOperation} // Usamos cancelOperation para reiniciar todo
                     className="mt-4 text-sm text-gray-500 hover:text-red-500 transition duration-150 flex items-center space-x-1"
                 >
-                    <X size={16} />
+                    <XIcon size={16} />
                     <span>Reiniciar Aplicación</span>
                 </button>
             </div>
