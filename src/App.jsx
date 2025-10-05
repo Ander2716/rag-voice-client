@@ -120,7 +120,15 @@ const App = () => {
     const mediaRecorderRef = useRef(null);
     const recognitionRef = useRef(null);
 
+    // FIX: Referencia para el estado más reciente (evita clausuras obsoletas)
+    const appStateRef = useRef(appState);
+    useEffect(() => {
+        appStateRef.current = appState;
+    }, [appState]);
+
+
     // Inicialización y configuración del STT
+    // Este efecto ahora corre una sola vez al montar.
     useEffect(() => {
         if (SpeechRecognition) {
             setSttSupported(true);
@@ -134,12 +142,12 @@ const App = () => {
                 const last = event.results.length - 1;
                 const transcript = event.results[last][0].transcript;
                 
-                // Si la transcripción es válida y estamos esperando (TRANSCRIBING), pasamos a READY_TO_SEND
-                if (transcript && appState === STATES.TRANSCRIBING) {
+                // FIX: Usar appStateRef.current para el estado actual
+                if (transcript && appStateRef.current === STATES.TRANSCRIBING) {
                     setQuery(transcript); 
                     setAppState(STATES.READY_TO_SEND);
                     setStatus("📝 Revisa, edita y presiona ENVIAR.");
-                } else if (appState === STATES.TRANSCRIBING) {
+                } else if (appStateRef.current === STATES.TRANSCRIBING) {
                     // Transcripción vacía, volver a IDLE
                     setStatus("No se detectó voz. Listo para grabar...");
                     setAppState(STATES.IDLE);
@@ -148,22 +156,26 @@ const App = () => {
 
             // Manejo de errores de transcripción
             recognitionRef.current.onerror = (event) => {
-                if (event.error !== 'no-speech' && appState !== STATES.IDLE) {
+                const currentState = appStateRef.current; // Obtener el estado actual
+                
+                if (event.error !== 'no-speech' && currentState !== STATES.IDLE) {
                     console.error('Speech Recognition Error:', event.error);
                     setStatus(`❌ Error STT: ${event.error}. Intenta de nuevo.`);
-                } else if (event.error === 'no-speech' && appState === STATES.TRANSCRIBING) {
+                } else if (event.error === 'no-speech' && currentState === STATES.TRANSCRIBING) {
                     setStatus("No se detectó voz o la grabación fue muy corta.");
                 }
-                // Si hay error (y no fue un abort), volvemos a IDLE
-                if (appState !== STATES.IDLE) { 
+                
+                // Si hay error, y no estamos en IDLE (por abortar o similar), volvemos a IDLE
+                if (currentState !== STATES.IDLE) { 
                     setAppState(STATES.IDLE);
                 }
             };
 
             // Cuando el reconocimiento de voz termina (si no hubo resultado)
             recognitionRef.current.onend = () => {
-                if (appState === STATES.TRANSCRIBING) {
-                    // Si el estado sigue en TRANSCRIBING significa que onresult no se disparó
+                // FIX: Usar appStateRef.current para el estado actual
+                if (appStateRef.current === STATES.TRANSCRIBING) {
+                    // Si el estado sigue en TRANSCRIBING significa que onresult/onerror no se disparó
                     setStatus("Procesamiento finalizado sin transcripción.");
                     setAppState(STATES.IDLE);
                 }
@@ -172,7 +184,7 @@ const App = () => {
             setSttSupported(false);
             setStatus("❌ Error: Tu navegador no soporta el reconocimiento de voz.");
         }
-    }, [appState]); // Dependencia en appState para garantizar el onresult/onend se evalúa correctamente
+    }, []); // El efecto se ejecuta solo al montar: []
 
     // ====================================================================
     // FLUJO DE ESTADOS
@@ -191,38 +203,55 @@ const App = () => {
 
         const payload = { query: textQuery };
 
-        try {
-            // Nota: Este fetch DEBE ser envuelto en un loop de backoff exponencial en un entorno de producción
-            // para manejar la limitación de velocidad de la API, pero lo mantenemos simple aquí.
-            const res = await fetch(API_URL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload),
-            });
+        // Simulamos un backoff exponencial simple para evitar spam a la API
+        const maxRetries = 3;
+        let lastError = null;
 
-            if (!res.ok) {
-                setStatus(`Error HTTP: ${res.status} al comunicarse con la API.`);
-                throw new Error(`HTTP error! status: ${res.status}`);
+        for (let attempt = 0; attempt < maxRetries; attempt++) {
+            try {
+                const res = await fetch(API_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+    
+                if (!res.ok) {
+                    throw new Error(`Error HTTP: ${res.status} al comunicarse con la API.`);
+                }
+    
+                const data = await res.json();
+                
+                if (data.answer) {
+                    setResponse(data.answer);
+                    setStatus("Respuesta RAG recibida.");
+                } else {
+                    setResponse("La API devolvió un formato de respuesta inesperado.");
+                    setStatus("Error de formato de respuesta.");
+                }
+                
+                // FIX: Al tener éxito, establecemos el estado IDLE y salimos
+                setAppState(STATES.IDLE); 
+                return; // Éxito, salir de la función
+            } catch (error) {
+                lastError = error;
+                console.error(`Intento ${attempt + 1} fallido.`, error);
+                if (attempt < maxRetries - 1) {
+                    // Esperar 1s, 2s
+                    const delay = Math.pow(2, attempt) * 1000;
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
             }
-
-            const data = await res.json();
-            
-            if (data.answer) {
-                setResponse(data.answer);
-                setStatus("Respuesta RAG recibida.");
-            } else {
-                setResponse("La API devolvió un formato de respuesta inesperado.");
-                setStatus("Error de formato de respuesta.");
-            }
-        } catch (error) {
-            console.error("Error de conexión con la API:", error);
-            setStatus("Hubo un error al comunicarse con la API. Asegúrate de que el túnel de Cloudflare esté activo y la URL sea correcta.");
-            setResponse(null);
-        } finally {
-            // Regresar al estado IDLE después de la respuesta
-            setAppState(STATES.IDLE);
         }
+        
+        // Si el loop termina sin éxito (todos los intentos fallaron):
+        console.error("Fallo final después de reintentos.", lastError);
+        setStatus("Hubo un error al comunicarse con la API. Asegúrate de que el túnel de Cloudflare esté activo y la URL sea correcta.");
+        setResponse(null);
+
+        // FIX: Establecemos el estado IDLE en caso de fallo total
+        setAppState(STATES.IDLE);
     };
+
 
     // Helper: Iniciar Grabación
     const startRecording = async () => {
@@ -231,7 +260,7 @@ const App = () => {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             
-            // Inicia MediaRecorder para mantener el micrófono activo
+            // Inicia MediaRecorder para mantener el micrófono activo (necesario en algunos navegadores)
             mediaRecorderRef.current = new MediaRecorder(stream);
             mediaRecorderRef.current.start();
             
