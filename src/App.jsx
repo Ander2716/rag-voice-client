@@ -142,7 +142,7 @@ const App = () => {
                 const last = event.results.length - 1;
                 const transcript = event.results[last][0].transcript;
                 
-                // FIX: Usar appStateRef.current para el estado actual
+                // Usar appStateRef.current para el estado actual
                 if (transcript && appStateRef.current === STATES.TRANSCRIBING) {
                     setQuery(transcript); 
                     setAppState(STATES.READY_TO_SEND);
@@ -173,7 +173,7 @@ const App = () => {
 
             // Cuando el reconocimiento de voz termina (si no hubo resultado)
             recognitionRef.current.onend = () => {
-                // FIX: Usar appStateRef.current para el estado actual
+                // Usar appStateRef.current para el estado actual
                 if (appStateRef.current === STATES.TRANSCRIBING) {
                     // Si el estado sigue en TRANSCRIBING significa que onresult/onerror no se disparó
                     setStatus("Procesamiento finalizado sin transcripción.");
@@ -229,7 +229,6 @@ const App = () => {
                     setStatus("Error de formato de respuesta.");
                 }
                 
-                // FIX: Al tener éxito, establecemos el estado IDLE y salimos
                 setAppState(STATES.IDLE); 
                 return; // Éxito, salir de la función
             } catch (error) {
@@ -248,7 +247,6 @@ const App = () => {
         setStatus("Hubo un error al comunicarse con la API. Asegúrate de que el túnel de Cloudflare esté activo y la URL sea correcta.");
         setResponse(null);
 
-        // FIX: Establecemos el estado IDLE en caso de fallo total
         setAppState(STATES.IDLE);
     };
 
@@ -285,16 +283,22 @@ const App = () => {
     // Helper: Detener Grabación y Procesar Transcripción
     const stopRecording = () => {
         if (appState === STATES.RECORDING) {
-            // Detiene la grabación de audio
+            // 1. Detiene la grabación de audio
             if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
                 mediaRecorderRef.current.stop();
             }
-            // Detiene el reconocimiento de voz (dispara onresult/onerror/onend)
-            if (recognitionRef.current) {
-                recognitionRef.current.stop(); 
-            }
+            
             setAppState(STATES.TRANSCRIBING);
             setStatus("Procesando transcripción...");
+
+            // 2. FIX CLAVE PARA CHROME ANDROID: 
+            // Introducir un retraso mínimo antes de detener la API de Speech Recognition
+            // Esto asegura que haya tiempo para que el audio grabado se envíe al motor de STT.
+            setTimeout(() => {
+                if (recognitionRef.current) {
+                    recognitionRef.current.stop(); 
+                }
+            }, 50); // 50 milisegundos de retraso
         }
     };
     
@@ -306,7 +310,8 @@ const App = () => {
                 mediaRecorderRef.current.stop();
             }
             if (recognitionRef.current) {
-                recognitionRef.current.abort(); // Abort detiene sin disparar onresult/onend
+                // Abort detiene sin disparar onresult/onend, lo cual es correcto para cancelar
+                recognitionRef.current.abort(); 
             }
             setStatus("Grabación/Procesamiento cancelado.");
         } 
