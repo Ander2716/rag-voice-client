@@ -116,7 +116,7 @@ const App = () => {
     const [response, setResponse] = useState(null);
     const [sttSupported, setSttSupported] = useState(false);
     
-    // Referencia SOLO para SpeechRecognition (MediaRecorder eliminada)
+    // Referencia SOLO para SpeechRecognition 
     const recognitionRef = useRef(null);
 
     // Referencia para el estado más reciente (evita clausuras obsoletas)
@@ -169,6 +169,7 @@ const App = () => {
 
             // Cuando el reconocimiento de voz termina (si no hubo resultado)
             recognitionRef.current.onend = () => {
+                // Solo si estábamos esperando una transcripción, volvemos a IDLE
                 if (appStateRef.current === STATES.TRANSCRIBING) {
                     setStatus("Procesamiento finalizado sin transcripción.");
                     setAppState(STATES.IDLE);
