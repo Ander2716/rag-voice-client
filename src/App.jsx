@@ -103,7 +103,7 @@ const STATES = {
 // ====================================================================
 
 // ESTA URL DEBE APUNTAR A TU TUNEL DE CLOUDFLARE + /ask
-const API_URL = "https://mineral-aging-scratch-rna.trycloudflare.com/ask"; 
+const API_URL = "https://trend-lid-later-jacob.trycloudflare.com/ask"; 
 // 🚨 ATENCIÓN: Por favor, reemplaza la URL anterior por tu URL ACTIVA
 // Si tu API está en localhost:8000, necesitarás Cloudflare Tunnel o similar.
 
